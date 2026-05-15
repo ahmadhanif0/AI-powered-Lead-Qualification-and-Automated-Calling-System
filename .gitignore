@@ -1,0 +1,17 @@
+# Root secrets and virtual environments
+.env
+.venv/
+venv/
+*.log
+
+# Backend (Python) ignores
+__pycache__/
+app/__pycache__/
+app/logs/
+
+# Frontend (React/Node) ignores
+node_modules/
+front-end/node_modules/
+dist/
+build/
+.DS_Store
