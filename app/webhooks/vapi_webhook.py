@@ -209,10 +209,11 @@ async def vapi_webhook(request: Request):
     await call_log_repo.update_log(
         vapi_call_id=vapi_call_id,
         data={
-            "transcript": transcript,
-            "ai_decision": result,
-            "call_status": "completed",
-            "duration_seconds": duration
+            "transcript":       transcript,
+            "ai_decision":      result,
+            "call_status":      "completed",
+            "duration_seconds": duration,
+            "recording_url":    artifact.get("recordingUrl") or message.get("recordingUrl"),
         }
     )
 

@@ -447,3 +447,69 @@ class VapiClient:
 
         response.raise_for_status()
         return response.json()
+
+    async def delete_assistant(self, vapi_assistant_id: str):
+        """
+        Delete an assistant from VAPI.
+        Returns silently if the assistant is already gone (404).
+        Raises for any other error.
+        """
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.delete(
+                f"{self.BASE_URL}/assistant/{vapi_assistant_id}",
+                headers={
+                    "Authorization": f"Bearer {settings.VAPI_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+            )
+
+        logger.info(f"VAPI Delete Assistant Status: {response.status_code}")
+
+        if response.status_code == 404:
+            logger.warning(
+                f"Assistant {vapi_assistant_id} not found in VAPI — already deleted or never synced"
+            )
+            return None
+
+        response.raise_for_status()
+        return response.json() if response.text else None
+
+    async def update_assistant(self, vapi_assistant_id: str, data: dict):
+        """
+        Update an existing assistant in VAPI via PATCH.
+        Uses the same payload structure as create_assistant.
+        """
+        payload = {
+            "name":         data.get("name"),
+            "firstMessage": data.get("first_message", ""),
+            "model": {
+                "provider": data.get("model_provider", "openai"),
+                "model":    data.get("model_name", "gpt-4.1"),
+                "messages": [
+                    {
+                        "role":    "system",
+                        "content": data.get("system_prompt", ""),
+                    }
+                ],
+            },
+            "voice": {
+                "provider": "vapi",
+                "voiceId":  data.get("voice_id", "Elliot"),
+            },
+        }
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.patch(
+                f"{self.BASE_URL}/assistant/{vapi_assistant_id}",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {settings.VAPI_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+            )
+
+        logger.info(f"VAPI Update Assistant Status: {response.status_code}")
+        logger.info(f"VAPI Update Assistant Response: {response.text}")
+
+        response.raise_for_status()
+        return response.json()

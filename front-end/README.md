@@ -447,3 +447,69 @@ tasks.py (queues/tasks.py)
 LeadSyncService (services/lead_sync_service.py)
   ├── imports H
 A network error occurred. Please check your connection and try again.
+
+.............................................................................
+
+How Login Works
+Both users and admins use the same login page at http://localhost:5173/login. There is no separate admin login — the system checks the role field in the database after login and shows different UI accordingly.
+
+Flow:
+
+Enter email + password → POST /auth/login → JWT token returned
+→ token stored in localStorage → redirected to dashboard
+→ sidebar shows "Admin" section only if role = "admin"
+Default Admin Credentials
+The admin account was created by 
+add_auth_system.sql
+:
+
+Field	Value
+Email	admin@example.com
+Password	Admin@1234
+Role	admin
+How a New Admin is Created
+There are two ways, both require an existing admin:
+
+Way 1 — Admin panel in the UI
+Login as admin → go to Admin → Users
+Click New User
+Fill in email, password, full name
+Set Role = Admin
+Click Create
+Way 2 — API call
+# First get an admin token
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"Admin@1234"}'
+
+# Use that token to create a new admin
+curl -X POST http://localhost:8000/admin/users \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"newadmin@example.com","password":"NewAdmin@1234","full_name":"New Admin","role":"admin"}'
+Way 3 — Direct SQL (if you're locked out)
+Run this in Supabase SQL editor:
+
+-- First generate a hash by running in your terminal:
+-- python -c "from passlib.context import CryptContext; print(CryptContext(['bcrypt']).hash('YourPassword@123'))"
+
+INSERT INTO users (email, password_hash, full_name, role, is_active)
+VALUES (
+    'newadmin@company.com',
+    '$2b$12$PASTE_YOUR_GENERATED_HASH_HERE',
+    'New Admin',
+    'admin',
+    TRUE
+)
+ON CONFLICT (email) DO NOTHING;
+How Regular Users Sign Up
+Regular users go to http://localhost:5173/signup and fill in name, email, password. They always get role = "user" — they cannot self-assign admin. Only an existing admin can promote someone to admin via the admin panel or API.
+
+What Each Role Can See
+Feature	User	Admin
+Dashboard	Own leads only	All leads
+Assistants	Own assistants	All assistants
+HubSpot sync	Own leads	Own leads
+Settings	Own retry config, CRM, notifications	Same
+Admin → Users	❌ Hidden	✅ Full CRUD
+Admin → Analytics	❌ Hidden	✅ Global stats

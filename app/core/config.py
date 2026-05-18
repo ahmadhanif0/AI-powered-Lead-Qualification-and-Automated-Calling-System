@@ -14,9 +14,15 @@ class Settings(BaseSettings):
     REDIS_URL: str
 
     # =========================
-    # HUBSPOT
+    # HUBSPOT OAuth
     # =========================
-    HUBSPOT_ACCESS_TOKEN: str
+    # Legacy token kept optional so existing .env files don't break
+    # immediately. Remove once all users have migrated to OAuth.
+    HUBSPOT_ACCESS_TOKEN: str = ""
+
+    HUBSPOT_CLIENT_ID:     str = ""
+    HUBSPOT_CLIENT_SECRET: str = ""
+    HUBSPOT_REDIRECT_URI:  str = "http://localhost:8000/crm/hubspot/callback"
 
     # =========================
     # VAPI
@@ -33,21 +39,23 @@ class Settings(BaseSettings):
     TWILIO_WEBHOOK_URL: str
 
     # =========================
+    # JWT / AUTH
+    # =========================
+    JWT_SECRET_KEY: str = "change-me-in-production-use-a-long-random-string"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # =========================
     # EMAIL NOTIFICATIONS
     # =========================
     ENABLE_EMAIL_NOTIFICATIONS: bool = False
-
-    # SMTP (Gmail, Outlook, custom)
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
-
-    # Addresses
     NOTIFICATION_EMAIL_FROM: str = ""
-    NOTIFICATION_EMAIL_TO: str = ""   # comma-separated for multiple recipients
-
-    # Dashboard URL included in email body
+    NOTIFICATION_EMAIL_TO: str = ""
     DASHBOARD_URL: str = "http://localhost:5173"
 
     # =========================

@@ -10,21 +10,33 @@ from app.logs.logger import logger
 
 class NotificationService:
 
-    # ------------------------------------------------------------------
-    # Public entry point
-    # ------------------------------------------------------------------
-
-    async def send_notification(self, lead: dict, decision: str):
-
+    async def send_notification(self, lead: dict, decision: str, user_id: int = None):
+        """
+        Fire an alert for a significant AI decision.
+        Respects per-user notification preferences when user_id is provided.
+        """
         lead_id    = lead.get("id")
         name       = lead.get("name") or f"Lead #{lead_id}"
-        phone      = lead.get("phone")    or "N/A"
-        email_addr = lead.get("email")    or "N/A"
-        company    = lead.get("company")  or "N/A"
-        score      = lead.get("score",  0)
+        phone      = lead.get("phone")   or "N/A"
+        email_addr = lead.get("email")   or "N/A"
+        company    = lead.get("company") or "N/A"
+        score      = lead.get("score", 0)
         transcript = lead.get("last_transcript") or ""
 
-        # ── Console / log notification ──────────────────────────────
+        # ── Check user notification preferences ──────────────────────
+        if user_id:
+            try:
+                from app.models.user import User
+                user = await User.get_or_none(id=user_id)
+                if user:
+                    event_type = decision.lower().replace(" ", "_")
+                    if event_type == "interested" and not user.email_on_interested:
+                        logger.info(f"Skipping notification for lead {lead_id}: user {user_id} disabled email_on_interested")
+                        return {"notified": False, "reason": "preference_disabled"}
+            except Exception as e:
+                logger.warning(f"Could not check notification preferences for user {user_id}: {e}")
+
+        # ── Console / log notification ────────────────────────────────
         sep = "=" * 60
         logger.info(sep)
         logger.info("🔔  SALES ALERT — ACTION REQUIRED")
@@ -37,88 +49,39 @@ class NotificationService:
         logger.info(f"   Score     : {score}")
         logger.info(sep)
 
-        # ── Email notification ──────────────────────────────────────
+        # ── Email notification ────────────────────────────────────────
         if not settings.ENABLE_EMAIL_NOTIFICATIONS:
             return {"notified": True, "channel": "log", "lead_id": lead_id}
 
-        if not all([
-            settings.SMTP_USER,
-            settings.SMTP_PASSWORD,
-            settings.NOTIFICATION_EMAIL_FROM,
-            settings.NOTIFICATION_EMAIL_TO,
-        ]):
-            logger.warning(
-                "Email notifications enabled but SMTP credentials are "
-                "incomplete — skipping email send."
-            )
+        if not all([settings.SMTP_USER, settings.SMTP_PASSWORD,
+                    settings.NOTIFICATION_EMAIL_FROM, settings.NOTIFICATION_EMAIL_TO]):
+            logger.warning("Email notifications enabled but SMTP credentials incomplete — skipping.")
             return {"notified": True, "channel": "log", "lead_id": lead_id}
 
-        # Build and send — retry once on failure
         for attempt in range(1, 3):
             try:
                 await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    self._send_email,
-                    lead_id, name, phone, email_addr,
-                    company, score, transcript, decision
+                    None, self._send_email,
+                    lead_id, name, phone, email_addr, company, score, transcript, decision
                 )
-                logger.info(
-                    f"Email notification sent for lead {lead_id} "
-                    f"(decision: {decision})"
-                )
-                return {
-                    "notified": True,
-                    "channel":  "email",
-                    "lead_id":  lead_id
-                }
-
+                logger.info(f"Email notification sent for lead {lead_id} (decision: {decision})")
+                return {"notified": True, "channel": "email", "lead_id": lead_id}
             except Exception as e:
-                logger.error(
-                    f"Email send attempt {attempt} failed for lead "
-                    f"{lead_id}: {e}"
-                )
+                logger.error(f"Email send attempt {attempt} failed for lead {lead_id}: {e}")
                 if attempt < 2:
-                    await asyncio.sleep(3)   # brief pause before retry
+                    await asyncio.sleep(3)
 
-        # Both attempts failed — workflow continues regardless
-        logger.error(
-            f"All email attempts failed for lead {lead_id}. "
-            "Workflow continues."
-        )
+        logger.error(f"All email attempts failed for lead {lead_id}. Workflow continues.")
         return {"notified": False, "channel": "email_failed", "lead_id": lead_id}
 
-    # ------------------------------------------------------------------
-    # Internal: synchronous SMTP send (run in executor to stay async)
-    # ------------------------------------------------------------------
+    def _send_email(self, lead_id, name, phone, email_addr, company, score, transcript, decision):
+        recipients = [r.strip() for r in settings.NOTIFICATION_EMAIL_TO.split(",") if r.strip()]
+        subject    = f"🔥 New {decision} Lead: {name}"
+        excerpt    = (transcript[:500] + "…" if len(transcript) > 500 else transcript) or "No transcript available."
 
-    def _send_email(
-        self,
-        lead_id:    int,
-        name:       str,
-        phone:      str,
-        email_addr: str,
-        company:    str,
-        score:      float,
-        transcript: str,
-        decision:   str,
-    ):
-        recipients = [
-            r.strip()
-            for r in settings.NOTIFICATION_EMAIL_TO.split(",")
-            if r.strip()
-        ]
-
-        subject = f"🔥 New {decision} Lead: {name}"
-
-        # Trim transcript to first 500 chars for the email excerpt
-        transcript_excerpt = (
-            transcript[:500] + "…" if len(transcript) > 500 else transcript
-        ) or "No transcript available."
-
-        plain_body = textwrap.dedent(f"""
+        plain = textwrap.dedent(f"""
             AI LEAD QUALIFICATION ALERT
             ===========================
-
             Decision  : {decision}
             Lead ID   : {lead_id}
             Name      : {name}
@@ -129,68 +92,42 @@ class NotificationService:
 
             TRANSCRIPT EXCERPT
             ------------------
-            {transcript_excerpt}
+            {excerpt}
 
             View full details: {settings.DASHBOARD_URL}
-
             ---
             Sent by {settings.APP_NAME}
         """).strip()
 
-        html_body = f"""
+        html = f"""
         <html><body style="font-family:Arial,sans-serif;color:#333;max-width:600px">
           <h2 style="color:#16a34a">🔥 {decision} Lead Alert</h2>
           <table style="border-collapse:collapse;width:100%">
-            <tr><td style="padding:6px;font-weight:bold;width:120px">Lead ID</td>
-                <td style="padding:6px">{lead_id}</td></tr>
-            <tr style="background:#f9f9f9">
-                <td style="padding:6px;font-weight:bold">Name</td>
-                <td style="padding:6px">{name}</td></tr>
-            <tr><td style="padding:6px;font-weight:bold">Company</td>
-                <td style="padding:6px">{company}</td></tr>
-            <tr style="background:#f9f9f9">
-                <td style="padding:6px;font-weight:bold">Email</td>
-                <td style="padding:6px">{email_addr}</td></tr>
-            <tr><td style="padding:6px;font-weight:bold">Phone</td>
-                <td style="padding:6px">{phone}</td></tr>
-            <tr style="background:#f9f9f9">
-                <td style="padding:6px;font-weight:bold">Score</td>
-                <td style="padding:6px"><strong>{score}</strong></td></tr>
-            <tr><td style="padding:6px;font-weight:bold">Decision</td>
-                <td style="padding:6px;color:#16a34a;font-weight:bold">{decision}</td></tr>
+            <tr><td style="padding:6px;font-weight:bold;width:120px">Lead ID</td><td style="padding:6px">{lead_id}</td></tr>
+            <tr style="background:#f9f9f9"><td style="padding:6px;font-weight:bold">Name</td><td style="padding:6px">{name}</td></tr>
+            <tr><td style="padding:6px;font-weight:bold">Company</td><td style="padding:6px">{company}</td></tr>
+            <tr style="background:#f9f9f9"><td style="padding:6px;font-weight:bold">Email</td><td style="padding:6px">{email_addr}</td></tr>
+            <tr><td style="padding:6px;font-weight:bold">Phone</td><td style="padding:6px">{phone}</td></tr>
+            <tr style="background:#f9f9f9"><td style="padding:6px;font-weight:bold">Score</td><td style="padding:6px"><strong>{score}</strong></td></tr>
+            <tr><td style="padding:6px;font-weight:bold">Decision</td><td style="padding:6px;color:#16a34a;font-weight:bold">{decision}</td></tr>
           </table>
-
           <h3 style="margin-top:24px">Transcript Excerpt</h3>
-          <pre style="background:#f4f4f4;padding:12px;border-radius:4px;
-                      white-space:pre-wrap;font-size:13px">{transcript_excerpt}</pre>
-
+          <pre style="background:#f4f4f4;padding:12px;border-radius:4px;white-space:pre-wrap;font-size:13px">{excerpt}</pre>
           <p style="margin-top:24px">
-            <a href="{settings.DASHBOARD_URL}"
-               style="background:#2563eb;color:white;padding:10px 20px;
-                      border-radius:4px;text-decoration:none">
-              View Dashboard →
-            </a>
+            <a href="{settings.DASHBOARD_URL}" style="background:#2563eb;color:white;padding:10px 20px;border-radius:4px;text-decoration:none">View Dashboard →</a>
           </p>
-
           <hr style="margin-top:32px;border:none;border-top:1px solid #eee"/>
           <p style="font-size:11px;color:#999">Sent by {settings.APP_NAME}</p>
-        </body></html>
-        """
+        </body></html>"""
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"]    = settings.NOTIFICATION_EMAIL_FROM
         msg["To"]      = ", ".join(recipients)
-
-        msg.attach(MIMEText(plain_body, "plain"))
-        msg.attach(MIMEText(html_body,  "html"))
+        msg.attach(MIMEText(plain, "plain"))
+        msg.attach(MIMEText(html,  "html"))
 
         with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
-            server.ehlo()
-            server.starttls()
+            server.ehlo(); server.starttls()
             server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-            server.sendmail(
-                settings.NOTIFICATION_EMAIL_FROM,
-                recipients,
-                msg.as_string()
-            )
+            server.sendmail(settings.NOTIFICATION_EMAIL_FROM, recipients, msg.as_string())

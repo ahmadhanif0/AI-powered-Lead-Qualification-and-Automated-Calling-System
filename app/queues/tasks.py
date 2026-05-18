@@ -27,17 +27,14 @@ def run_async(coro):
 @celery_app.task(
     autoretry_for=(Exception,),
     max_retries=3,
-    default_retry_delay=60,    # 1 minute between sync retries
+    default_retry_delay=60,
 )
-def sync_hubspot_leads_task():
+def sync_hubspot_leads_task(user_id: int = None):
 
     async def runner():
-
         await init_db()
-
         service = LeadSyncService()
-
-        return await service.sync_hubspot_leads()
+        return await service.sync_hubspot_leads(user_id=user_id)
 
     return run_async(runner())
 
@@ -94,8 +91,34 @@ def retry_call_task(lead_id: int):
 
 
 @celery_app.task
-def poll_retry_queue_task():
+def scheduled_call_task(scheduled_call_id: int):
+    """Fires a call for a ScheduledCall record at the scheduled time."""
+    logger.info(f"SCHEDULED CALL TASK: scheduled_call_id={scheduled_call_id}")
 
+    async def runner():
+        await init_db()
+        from app.models.scheduled_call import ScheduledCall
+
+        sc = await ScheduledCall.get_or_none(id=scheduled_call_id)
+        if not sc or sc.status != "pending":
+            logger.info(f"Scheduled call {scheduled_call_id} skipped (status={getattr(sc, 'status', 'not found')})")
+            return
+
+        service = CallService()
+        try:
+            result = await service.start_call(sc.lead_id, is_retry=False)
+            sc.status = "completed"
+            await sc.save()
+            return result
+        except Exception as e:
+            logger.error(f"Scheduled call {scheduled_call_id} failed: {e}")
+            raise
+
+    return run_async(runner())
+
+
+@celery_app.task
+def poll_retry_queue_task():
     logger.info("POLL RETRY QUEUE: checking for overdue retries")
 
     async def runner():

@@ -9,12 +9,18 @@ class LeadRepository:
 
     @staticmethod
     async def get_by_hubspot_id(
-        hubspot_id: str
+        hubspot_id: str,
+        user_id: int = None,
     ) -> Optional[Lead]:
-
-        return await Lead.filter(
-            hubspot_id=hubspot_id
-        ).first()
+        """
+        Find a lead by HubSpot contact ID.
+        When user_id is provided, scope to that user so two users
+        can each have the same HubSpot contact as separate leads.
+        """
+        qs = Lead.filter(hubspot_id=hubspot_id)
+        if user_id is not None:
+            qs = qs.filter(user_id=user_id)
+        return await qs.first()
 
 
     @staticmethod
@@ -46,6 +52,7 @@ class LeadRepository:
             company=data.get("company"),
             lead_stage=data.get("lead_stage"),
             score=data.get("score", 0),
+            user_id=data.get("user_id"),   # multi-tenant: scope lead to its owner
         )
     
     @staticmethod

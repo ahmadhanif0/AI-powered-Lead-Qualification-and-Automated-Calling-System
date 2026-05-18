@@ -2,8 +2,8 @@ from app.crm.hubspot_client import HubSpotClient
 
 
 class HubSpotService:
-    def __init__(self):
-        self.client = HubSpotClient()
+    def __init__(self, client: HubSpotClient = None):
+        self.client = client or HubSpotClient()
 
     async def fetch_contacts(self):
         all_contacts = []

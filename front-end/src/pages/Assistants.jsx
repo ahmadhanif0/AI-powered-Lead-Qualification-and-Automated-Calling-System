@@ -1,16 +1,18 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bot, Plus, Search, Phone, Eye, RefreshCw } from "lucide-react";
-import { useAssistants } from "../hooks/useAssistants";
-import { useLeads }      from "../hooks/useLeads";
-import { Spinner }       from "../components/Spinner";
-import { EmptyState }    from "../components/EmptyState";
-import { Modal }         from "../components/Modal";
-import { useToast }      from "../components/Toast";
+import { Bot, Plus, Search, Phone, Eye, RefreshCw, Trash2, Pencil } from "lucide-react";
+import { useAssistants }        from "../hooks/useAssistants";
+import { useLeads }             from "../hooks/useLeads";
+import { api }                  from "../api/client";
+import { Spinner }              from "../components/Spinner";
+import { EmptyState }           from "../components/EmptyState";
+import { Modal }                from "../components/Modal";
+import { DeleteConfirmModal }   from "../components/DeleteConfirmModal";
+import { useToast }             from "../components/Toast";
 
-// ── Create Assistant Form ────────────────────────────────────────────
-const VOICE_OPTIONS  = ["Elliot", "Lily", "Rohan", "Savannah", "Hana", "Cole"];
-const MODEL_OPTIONS  = ["gpt-4.1", "gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"];
+// ── Shared constants ─────────────────────────────────────────────────
+const VOICE_OPTIONS    = ["Elliot", "Lily", "Rohan", "Savannah", "Hana", "Cole"];
+const MODEL_OPTIONS    = ["gpt-4.1", "gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"];
 const PROVIDER_OPTIONS = ["openai", "anthropic"];
 
 const EMPTY_FORM = {
@@ -22,22 +24,117 @@ const EMPTY_FORM = {
   model_name:     "gpt-4.1",
 };
 
+const inputCls = "w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 transition-colors";
+const labelCls = "block text-xs text-gray-400 mb-1";
+
+// ── Shared assistant form (used by both Create and Edit modals) ───────
+function AssistantForm({ form, setForm, onSubmit, onClose, loading, error, submitLabel }) {
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const valid = form.name.trim() && form.system_prompt.trim() && form.first_message.trim();
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-4">
+      <div className="grid grid-cols-2 gap-4">
+        <div className="col-span-2">
+          <label className={labelCls}>Name <span className="text-red-400">*</span></label>
+          <input className={inputCls} value={form.name} onChange={set("name")} placeholder="e.g. Sales Assistant" required />
+        </div>
+
+        <div className="col-span-2">
+          <label className={labelCls}>First Message <span className="text-red-400">*</span></label>
+          <input className={inputCls} value={form.first_message} onChange={set("first_message")}
+            placeholder="Hi, I'm calling about your business growth…" required />
+        </div>
+
+        <div className="col-span-2">
+          <label className={labelCls}>System Prompt <span className="text-red-400">*</span></label>
+          <textarea className={`${inputCls} resize-none`} rows={5} value={form.system_prompt}
+            onChange={set("system_prompt")}
+            placeholder="You are a professional sales qualification agent. Your goal is to…" required />
+        </div>
+
+        <div>
+          <label className={labelCls}>Voice</label>
+          <select className={inputCls} value={form.voice_id} onChange={set("voice_id")}>
+            {VOICE_OPTIONS.map((v) => <option key={v}>{v}</option>)}
+          </select>
+        </div>
+
+        <div>
+          <label className={labelCls}>Model Provider</label>
+          <select className={inputCls} value={form.model_provider} onChange={set("model_provider")}>
+            {PROVIDER_OPTIONS.map((p) => <option key={p}>{p}</option>)}
+          </select>
+        </div>
+
+        <div className="col-span-2">
+          <label className={labelCls}>Model</label>
+          <select className={inputCls} value={form.model_name} onChange={set("model_name")}>
+            {MODEL_OPTIONS.map((m) => <option key={m}>{m}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {error && (
+        <p className="text-red-400 text-xs bg-red-900/30 border border-red-800 rounded p-2">{error}</p>
+      )}
+
+      <div className="flex gap-3 pt-1">
+        <button type="button" onClick={onClose}
+          className="flex-1 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm transition-colors">
+          Cancel
+        </button>
+        <button type="submit" disabled={loading || !valid}
+          className="flex-1 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-sm font-medium transition-colors flex items-center justify-center gap-2">
+          {loading ? <Spinner size={14} /> : null}
+          {loading ? "Saving…" : submitLabel}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// ── Create Assistant Modal ────────────────────────────────────────────
 function CreateAssistantModal({ onClose, onCreate }) {
   const [form,    setForm]    = useState(EMPTY_FORM);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState(null);
 
-  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setLoading(true); setError(null);
+    try { await onCreate(form); onClose(); }
+    catch (err) { setError(err.message); }
+    finally { setLoading(false); }
+  }
 
-  const valid = form.name.trim() && form.system_prompt.trim() && form.first_message.trim();
+  return (
+    <Modal open onClose={onClose} title="Create Assistant" maxWidth="max-w-2xl">
+      <AssistantForm form={form} setForm={setForm} onSubmit={handleSubmit}
+        onClose={onClose} loading={loading} error={error} submitLabel="Create Assistant" />
+    </Modal>
+  );
+}
+
+// ── Edit Assistant Modal ──────────────────────────────────────────────
+function EditAssistantModal({ assistant, onClose, onUpdated }) {
+  const [form, setForm] = useState({
+    name:           assistant.name           || "",
+    system_prompt:  assistant.system_prompt  || "",
+    first_message:  assistant.first_message  || "",
+    voice_id:       assistant.voice_id       || "Elliot",
+    model_provider: assistant.model_provider || "openai",
+    model_name:     assistant.model_name     || "gpt-4.1",
+  });
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState(null);
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!valid) return;
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     try {
-      await onCreate(form);
+      const updated = await api.assistants.update(assistant.id, form);
+      onUpdated(updated);
       onClose();
     } catch (err) {
       setError(err.message);
@@ -46,90 +143,15 @@ function CreateAssistantModal({ onClose, onCreate }) {
     }
   }
 
-  const inputCls = "w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 transition-colors";
-  const labelCls = "block text-xs text-gray-400 mb-1";
-
   return (
-    <Modal open onClose={onClose} title="Create Assistant" maxWidth="max-w-2xl">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
-          {/* Name */}
-          <div className="col-span-2">
-            <label className={labelCls}>Name <span className="text-red-400">*</span></label>
-            <input className={inputCls} value={form.name} onChange={set("name")} placeholder="e.g. Sales Assistant" required />
-          </div>
-
-          {/* First Message */}
-          <div className="col-span-2">
-            <label className={labelCls}>First Message <span className="text-red-400">*</span></label>
-            <input
-              className={inputCls}
-              value={form.first_message}
-              onChange={set("first_message")}
-              placeholder="Hi, I'm calling about your business growth…"
-              required
-            />
-          </div>
-
-          {/* System Prompt */}
-          <div className="col-span-2">
-            <label className={labelCls}>System Prompt <span className="text-red-400">*</span></label>
-            <textarea
-              className={`${inputCls} resize-none`}
-              rows={5}
-              value={form.system_prompt}
-              onChange={set("system_prompt")}
-              placeholder="You are a professional sales qualification agent. Your goal is to…"
-              required
-            />
-          </div>
-
-          {/* Voice */}
-          <div>
-            <label className={labelCls}>Voice</label>
-            <select className={inputCls} value={form.voice_id} onChange={set("voice_id")}>
-              {VOICE_OPTIONS.map((v) => <option key={v}>{v}</option>)}
-            </select>
-          </div>
-
-          {/* Model Provider */}
-          <div>
-            <label className={labelCls}>Model Provider</label>
-            <select className={inputCls} value={form.model_provider} onChange={set("model_provider")}>
-              {PROVIDER_OPTIONS.map((p) => <option key={p}>{p}</option>)}
-            </select>
-          </div>
-
-          {/* Model Name */}
-          <div className="col-span-2">
-            <label className={labelCls}>Model</label>
-            <select className={inputCls} value={form.model_name} onChange={set("model_name")}>
-              {MODEL_OPTIONS.map((m) => <option key={m}>{m}</option>)}
-            </select>
-          </div>
-        </div>
-
-        {error && (
-          <p className="text-red-400 text-xs bg-red-900/30 border border-red-800 rounded p-2">{error}</p>
-        )}
-
-        <div className="flex gap-3 pt-1">
-          <button type="button" onClick={onClose}
-            className="flex-1 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm transition-colors">
-            Cancel
-          </button>
-          <button type="submit" disabled={loading || !valid}
-            className="flex-1 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-sm font-medium transition-colors flex items-center justify-center gap-2">
-            {loading ? <Spinner size={14} /> : <Plus size={14} />}
-            {loading ? "Creating…" : "Create Assistant"}
-          </button>
-        </div>
-      </form>
+    <Modal open onClose={onClose} title={`Edit — ${assistant.name}`} maxWidth="max-w-2xl">
+      <AssistantForm form={form} setForm={setForm} onSubmit={handleSubmit}
+        onClose={onClose} loading={loading} error={error} submitLabel="Save Changes" />
     </Modal>
   );
 }
 
-// ── Start Call from Assistant ────────────────────────────────────────
+// ── Start Call from Assistant ─────────────────────────────────────────
 function CallFromAssistantModal({ assistant, leads, onClose, onSuccess }) {
   const [leadId,  setLeadId]  = useState("");
   const [loading, setLoading] = useState(false);
@@ -138,17 +160,13 @@ function CallFromAssistantModal({ assistant, leads, onClose, onSuccess }) {
 
   async function handleCall() {
     if (!leadId) return;
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     try {
       await startCall(parseInt(leadId));
       onSuccess(`Call started via ${assistant.name}`);
       onClose();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
   }
 
   return (
@@ -156,11 +174,8 @@ function CallFromAssistantModal({ assistant, leads, onClose, onSuccess }) {
       <div className="space-y-4">
         <div>
           <label className="block text-xs text-gray-400 mb-1">Select Lead</label>
-          <select
-            className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
-            value={leadId}
-            onChange={(e) => setLeadId(e.target.value)}
-          >
+          <select className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+            value={leadId} onChange={(e) => setLeadId(e.target.value)}>
             <option value="">— choose a lead —</option>
             {leads.map((l) => (
               <option key={l.id} value={l.id}>
@@ -169,16 +184,9 @@ function CallFromAssistantModal({ assistant, leads, onClose, onSuccess }) {
             ))}
           </select>
         </div>
-
-        {error && (
-          <p className="text-red-400 text-xs bg-red-900/30 border border-red-800 rounded p-2">{error}</p>
-        )}
-
+        {error && <p className="text-red-400 text-xs bg-red-900/30 border border-red-800 rounded p-2">{error}</p>}
         <div className="flex gap-3">
-          <button onClick={onClose}
-            className="flex-1 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm transition-colors">
-            Cancel
-          </button>
+          <button onClick={onClose} className="flex-1 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm transition-colors">Cancel</button>
           <button onClick={handleCall} disabled={!leadId || loading}
             className="flex-1 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-sm font-medium transition-colors flex items-center justify-center gap-2">
             {loading ? <Spinner size={14} /> : <Phone size={14} />}
@@ -190,24 +198,57 @@ function CallFromAssistantModal({ assistant, leads, onClose, onSuccess }) {
   );
 }
 
-// ── Assistants Page ──────────────────────────────────────────────────
+// ── Assistants Page ───────────────────────────────────────────────────
 export default function Assistants() {
   const navigate = useNavigate();
   const { assistants, loading, error, reload, create } = useAssistants();
-  const { leads } = useLeads();
+  const { leads }    = useLeads();
+  const { show, ToastEl } = useToast();
+
   const [search,      setSearch]      = useState("");
   const [showCreate,  setShowCreate]  = useState(false);
-  const [callTarget,  setCallTarget]  = useState(null);
-  const { show, ToastEl }             = useToast();
+  const [editTarget,  setEditTarget]  = useState(null);   // assistant being edited
+  const [callTarget,  setCallTarget]  = useState(null);   // assistant for call modal
+  const [deleteModal, setDeleteModal] = useState({ open: false, assistant: null });
+  const [deletingId,  setDeletingId]  = useState(null);
 
   const filtered = assistants.filter((a) =>
     a.name.toLowerCase().includes(search.toLowerCase())
   );
 
+  // ── Handlers ─────────────────────────────────────────────────────
+
   async function handleCreate(payload) {
     await create(payload);
     show("Assistant created successfully");
   }
+
+  function handleUpdated(updated) {
+    // Optimistically update the list without a full reload
+    reload();
+    show(`"${updated.name}" updated in database and VAPI`);
+  }
+
+  function openDeleteModal(a) {
+    setDeleteModal({ open: true, assistant: a });
+  }
+
+  async function handleDeleteConfirm() {
+    const a = deleteModal.assistant;
+    setDeletingId(a.id);
+    try {
+      await api.assistants.delete(a.id);
+      show(`"${a.name}" deleted from database and VAPI`);
+      setDeleteModal({ open: false, assistant: null });
+      reload();
+    } catch (e) {
+      show(e.message, "error");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  // ── Render ────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-6">
@@ -259,7 +300,9 @@ export default function Assistants() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {filtered.map((a) => (
-            <div key={a.id} className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-3 hover:border-gray-700 transition-colors">
+            <div key={a.id}
+              className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-3 hover:border-gray-700 transition-colors">
+
               {/* Card header */}
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-3">
@@ -294,17 +337,25 @@ export default function Assistants() {
 
               {/* Actions */}
               <div className="flex gap-2 pt-1">
-                <button
-                  onClick={() => navigate(`/assistants/${a.id}`)}
-                  className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-xs transition-colors"
-                >
+                <button onClick={() => navigate(`/assistants/${a.id}`)}
+                  className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-xs transition-colors">
                   <Eye size={12} /> Details
                 </button>
+                <button onClick={() => setEditTarget(a)}
+                  className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-xs transition-colors">
+                  <Pencil size={12} /> Edit
+                </button>
+                <button onClick={() => setCallTarget(a)}
+                  className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-blue-700 hover:bg-blue-600 text-xs transition-colors">
+                  <Phone size={12} /> Call
+                </button>
                 <button
-                  onClick={() => setCallTarget(a)}
-                  className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-blue-700 hover:bg-blue-600 text-xs transition-colors"
+                  onClick={() => openDeleteModal(a)}
+                  disabled={deletingId === a.id}
+                  title="Delete assistant (also removes from VAPI)"
+                  className="flex items-center justify-center px-2 py-1.5 rounded bg-red-800 hover:bg-red-700 disabled:opacity-50 text-xs transition-colors"
                 >
-                  <Phone size={12} /> Start Call
+                  {deletingId === a.id ? <Spinner size={11} /> : <Trash2 size={12} />}
                 </button>
               </div>
             </div>
@@ -312,13 +363,23 @@ export default function Assistants() {
         </div>
       )}
 
-      {/* Modals */}
+      {/* ── Modals ── */}
+
       {showCreate && (
         <CreateAssistantModal
           onClose={() => setShowCreate(false)}
           onCreate={handleCreate}
         />
       )}
+
+      {editTarget && (
+        <EditAssistantModal
+          assistant={editTarget}
+          onClose={() => setEditTarget(null)}
+          onUpdated={handleUpdated}
+        />
+      )}
+
       {callTarget && (
         <CallFromAssistantModal
           assistant={callTarget}
@@ -327,6 +388,16 @@ export default function Assistants() {
           onSuccess={(msg) => show(msg)}
         />
       )}
+
+      <DeleteConfirmModal
+        open={deleteModal.open}
+        onClose={() => !deletingId && setDeleteModal({ open: false, assistant: null })}
+        onConfirm={handleDeleteConfirm}
+        title="Delete Assistant"
+        itemName={deleteModal.assistant?.name}
+        warning="This will permanently delete the assistant from both the local database and VAPI. Any active calls using this assistant may be affected."
+        isDeleting={deletingId === deleteModal.assistant?.id}
+      />
     </div>
   );
 }
