@@ -68,6 +68,21 @@ async def vapi_webhook(request: Request):
                 }
             )
 
+            # ── Deduplication guard ──────────────────────────────────
+            # VAPI fires BOTH status-update (customer-did-not-answer) AND
+            # end-of-call-report for the same missed call.  If the
+            # end-of-call-report was already processed first (ai_decision
+            # is set on the CallLog), the workflow has already run —
+            # skip it here to prevent double retry entries and double
+            # retry_count increments.
+            existing_log = await call_log_repo.get_log_by_vapi_id(vapi_call_id)
+            if existing_log and existing_log.ai_decision:
+                logger.info(
+                    f"[Webhook] status-update skipping workflow for vapi_call_id={vapi_call_id} "
+                    f"— end-of-call-report already processed (ai_decision={existing_log.ai_decision})"
+                )
+                return {"status": "call_not_attended_deduped"}
+
             workflow = WorkflowEngine()
 
             lead = await repo.get_by_id(int(lead_id))
@@ -221,15 +236,34 @@ async def vapi_webhook(request: Request):
 
     lead = await repo.get_by_id(int(lead_id))
 
-    await workflow.handle_result(
-        lead={
-            "id": lead.id,
-            "phone": lead.phone,
-            "email": lead.email,
-            "company": lead.company
-        },
-        result=result
-    )
+    try:
+        await workflow.handle_result(
+            lead={
+                "id": lead.id,
+                "phone": lead.phone,
+                "email": lead.email,
+                "company": lead.company
+            },
+            result=result
+        )
+    except Exception as wf_err:
+        # Workflow failure (e.g. CRM sync error) must never swallow the
+        # status update.  Log the error and apply the status mapping directly
+        # so the lead always reflects the AI decision.
+        logger.error(f"[Webhook] WorkflowEngine failed for lead {lead_id}: {wf_err}")
+        _DECISION_TO_STATUS = {
+            "interested":     "Booked",
+            "not interested": "Won't Follow Up",
+            "call later":     "Pending",
+            "wrong number":   "Rejected",
+            "no response":    "Rejected",
+        }
+        fallback_status = _DECISION_TO_STATUS.get(result.lower().strip(), "Pending")
+        try:
+            await repo.update_lead_status(lead_id=int(lead_id), status=fallback_status)
+            logger.info(f"[Webhook] Fallback status set: lead {lead_id} → {fallback_status}")
+        except Exception as fb_err:
+            logger.error(f"[Webhook] Fallback status update also failed for lead {lead_id}: {fb_err}")
 
     return {
         "status": "processed",

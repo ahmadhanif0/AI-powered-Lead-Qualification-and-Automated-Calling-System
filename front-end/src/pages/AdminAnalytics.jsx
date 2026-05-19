@@ -65,25 +65,6 @@ export default function AdminAnalytics() {
         </div>
       )}
 
-      {/* Calls per day chart */}
-      {global?.calls_per_day && (
-        <div className="bg-gray-900 rounded-xl p-5">
-          <h2 className="font-semibold mb-4 text-sm text-gray-400 uppercase tracking-wide">Calls — Last 7 Days</h2>
-          <div className="flex items-end gap-2 h-32">
-            {global.calls_per_day.map(d => (
-              <div key={d.date} className="flex-1 flex flex-col items-center gap-1">
-                <span className="text-xs text-gray-400">{d.calls}</span>
-                <div
-                  className="w-full bg-blue-600 rounded-t transition-all"
-                  style={{ height: `${Math.max(4, (d.calls / maxCalls) * 100)}%` }}
-                />
-                <span className="text-xs text-gray-600 rotate-45 origin-left">{d.date.slice(5)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Lead status breakdown */}
       {global?.lead_status_breakdown && (
         <div className="bg-gray-900 rounded-xl p-5">

@@ -363,12 +363,13 @@ async def get_lead(
 from pydantic import BaseModel
 
 class UpdateLeadRequest(BaseModel):
-    """Only contact info fields — stage and status are system-controlled."""
+    """Contact info fields + optional manual status override."""
     first_name: Optional[str] = None
     last_name:  Optional[str] = None
     email:      Optional[str] = None
     phone:      Optional[str] = None
     company:    Optional[str] = None
+    status:     Optional[str] = None   # manual override: Pending/Booked/Rejected/Won't Follow Up
 
 
 class CreateLeadRequest(BaseModel):
@@ -526,8 +527,19 @@ async def update_lead(
     # Apply only the allowed contact-info fields
     allowed = {"first_name", "last_name", "email", "phone", "company"}
     update_data = {k: v for k, v in body.model_dump(exclude_none=True).items() if k in allowed}
+    logger.info(f"[Lead Update] lead_id={lead_id} update_data={update_data}")
     for field, value in update_data.items():
         setattr(lead, field, value)
+
+    # Apply manual status override if provided and valid
+    if body.status:
+        if body.status not in VALID_STATUSES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid status '{body.status}'. Must be one of: {sorted(VALID_STATUSES)}"
+            )
+        lead.status = body.status
+        logger.info(f"[Lead Update] Manual status override: lead {lead_id} → {body.status}")
 
     # Recalculate score — keep existing lead_stage (system-controlled)
     lead.score = _scorer.calculate_score({
@@ -539,8 +551,23 @@ async def update_lead(
 
     await lead.save()
 
-    # Sync contact info to HubSpot (NOT stage — that's managed by workflow actions)
-    if lead.hubspot_id and not lead.hubspot_id.startswith(("csv_", "manual_")):
+    # Sync contact info to HubSpot if the lead has a real HubSpot contact ID.
+    # Synthetic placeholder IDs (csv_*, manual_*) mean the lead was never
+    # pushed to HubSpot, so there's nothing to update there.
+    # Once a lead is pushed, hubspot_id becomes "{user_id}_{hs_contact_id}",
+    # which does NOT start with "csv_" or "manual_", so sync runs correctly.
+    has_real_hs_id = (
+        lead.hubspot_id
+        and not lead.hubspot_id.startswith("csv_")
+        and not lead.hubspot_id.startswith("manual_")
+    )
+    if not has_real_hs_id:
+        logger.info(
+            f"[Lead Update] Skipping HubSpot sync for lead {lead_id} — "
+            f"hubspot_id='{lead.hubspot_id}' is a synthetic placeholder "
+            f"(lead was never pushed to HubSpot)"
+        )
+    else:
         try:
             from app.crm.hubspot_client import HubSpotClient
             hs_client = await HubSpotClient.for_user(current_user)
@@ -551,8 +578,8 @@ async def update_lead(
                 "email":     lead.email      or "",
                 "phone":     lead.phone      or "",
                 "company":   lead.company    or "",
-                # lifecyclestage intentionally omitted — managed by workflow
             })
+            logger.info(f"[Lead Update] HubSpot contact updated for lead {lead_id}")
         except Exception as e:
             logger.warning(f"[Lead Update] HubSpot sync failed for lead {lead_id}: {e}")
 

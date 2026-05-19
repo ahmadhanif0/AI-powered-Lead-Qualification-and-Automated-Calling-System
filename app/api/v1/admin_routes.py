@@ -371,6 +371,13 @@ async def admin_list_leads(
     total = await qs.count()
     leads = await qs.order_by(sort_expr).offset((page - 1) * page_size).limit(page_size)
 
+    # Batch-load owners so we can show owner_email in the list without N+1 queries
+    owner_ids = {l.user_id for l in leads if l.user_id}
+    owners = {}
+    if owner_ids:
+        owner_list = await User.filter(id__in=list(owner_ids)).all()
+        owners = {u.id: u for u in owner_list}
+
     return {
         "total":     total,
         "page":      page,
@@ -379,6 +386,7 @@ async def admin_list_leads(
             {
                 "id":          l.id,
                 "user_id":     l.user_id,
+                "owner_email": owners[l.user_id].email if l.user_id and l.user_id in owners else None,
                 "first_name":  l.first_name,
                 "last_name":   l.last_name,
                 "name":        f"{l.first_name or ''} {l.last_name or ''}".strip(),

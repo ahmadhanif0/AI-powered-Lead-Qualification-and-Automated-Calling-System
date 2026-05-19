@@ -131,6 +131,7 @@ export const api = {
     scheduled:       ()       => request("/calls/scheduled"),
     cancelScheduled: (id)     => request(`/calls/scheduled/${id}`, { method: "DELETE" }),
     recording:       (callId) => request(`/users/calls/${callId}/recording`),
+    liveTranscript:  (leadId) => request(`/calls/leads/${leadId}/live-transcript`),
   },
 
   retries: {

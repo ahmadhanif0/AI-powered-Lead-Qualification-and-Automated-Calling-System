@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Users, Upload, Download, Search, Filter, Phone, X,
-         RefreshCw, CheckCircle, Eye, Pencil, Trash2, Plus } from "lucide-react";
+         RefreshCw, CheckCircle, Eye, Pencil, Trash2, Plus, FileText } from "lucide-react";
 import { useAuth }             from "../context/AuthContext";
 import { api }                 from "../api/client";
 import { Spinner }             from "../components/Spinner";
@@ -8,6 +8,7 @@ import { Modal }               from "../components/Modal";
 import { DeleteConfirmModal }  from "../components/DeleteConfirmModal";
 import { Pagination }          from "../components/Pagination";
 import { useToast }            from "../components/Toast";
+import { LiveTranscriptModal } from "../components/LiveTranscriptModal";
 import { leadStatusColor, callStatusColor, callStatusLabel, decisionColor }
   from "../lib/helpers";
 
@@ -119,13 +120,14 @@ function aiDecisionBadgeCls(decision) {
 
 // ── Edit Lead Modal ───────────────────────────────────────────────────
 function EditLeadModal({ lead, onClose, onSaved, isAdmin = false }) {
-  // Only contact-info fields — stage/status are system-controlled
+  // Contact-info fields + optional manual status override
   const [form, setForm] = useState({
     first_name: lead.first_name || "",
     last_name:  lead.last_name  || "",
     email:      lead.email      || "",
     phone:      lead.phone      || "",
     company:    lead.company    || "",
+    status:     lead.status     || "",
   });
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState(null);
@@ -136,15 +138,15 @@ function EditLeadModal({ lead, onClose, onSaved, isAdmin = false }) {
     setLoading(true); setError(null);
     try {
       const fn = isAdmin ? api.admin.leads.update : api.leads.update;
-      // Only send contact-info fields — backend ignores stage/status anyway
-      await fn(lead.id, {
+      const updated = await fn(lead.id, {
         first_name: form.first_name,
         last_name:  form.last_name  || undefined,
         email:      form.email,
         phone:      form.phone      || undefined,
         company:    form.company    || undefined,
+        status:     form.status     || undefined,
       });
-      onSaved();
+      onSaved(updated);   // pass updated lead back so table row refreshes immediately
       onClose();
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
@@ -205,6 +207,18 @@ function EditLeadModal({ lead, onClose, onSaved, isAdmin = false }) {
             <input className={inp} value={form.phone}   onChange={set("phone")} /></div>
           <div><label className={lbl}>Company</label>
             <input className={inp} value={form.company} onChange={set("company")} /></div>
+          <div className="col-span-2">
+            <label className={lbl}>
+              Status <span className="text-gray-600 font-normal">(manual override)</span>
+            </label>
+            <select className={inp} value={form.status} onChange={set("status")}>
+              <option value="">— keep current ({lead.status || "Pending"}) —</option>
+              <option value="Pending">Pending</option>
+              <option value="Booked">Booked</option>
+              <option value="Rejected">Rejected</option>
+              <option value="Won't Follow Up">Won't Follow Up</option>
+            </select>
+          </div>
         </div>
 
         {error && <p className="text-red-400 text-xs bg-red-900/30 border border-red-800 rounded p-2">{error}</p>}
@@ -485,6 +499,7 @@ export default function Leads() {
   const [deleteLead,  setDeleteLead]  = useState(null);
   const [deleting,    setDeleting]    = useState(false);
   const [callLead,    setCallLead]    = useState(null);
+  const [transcriptLead, setTranscriptLead] = useState(null);  // LiveTranscriptModal
 
   // Admin user filter
   const [users,          setUsers]          = useState([]);
@@ -686,6 +701,20 @@ export default function Leads() {
                           className="p-1.5 rounded hover:bg-gray-700 text-green-400 hover:text-green-300 transition-colors">
                           <Phone size={13} />
                         </button>
+                        {/* Live — shown while call is active */}
+                        {["calling", "in-progress", "in_progress", "queued"].includes(l.call_status) && (
+                          <button onClick={() => setTranscriptLead(l)} title="Live transcript"
+                            className="p-1.5 rounded hover:bg-gray-700 text-red-400 hover:text-red-300 transition-colors animate-pulse">
+                            <FileText size={13} />
+                          </button>
+                        )}
+                        {/* Recording — shown when call completed */}
+                        {l.call_status === "completed" && (
+                          <button onClick={() => setTranscriptLead(l)} title="View transcript & recording"
+                            className="p-1.5 rounded hover:bg-gray-700 text-yellow-400 hover:text-yellow-300 transition-colors">
+                            <Download size={13} />
+                          </button>
+                        )}
                         <button onClick={() => setDeleteLead(l)} title="Delete"
                           className="p-1.5 rounded hover:bg-gray-700 text-red-400 hover:text-red-300 transition-colors">
                           <Trash2 size={13} />
@@ -725,7 +754,33 @@ export default function Leads() {
           lead={editLead}
           isAdmin={isAdmin}
           onClose={() => setEditLead(null)}
-          onSaved={() => { show("Lead updated successfully"); load(page); }}
+          onSaved={(updated) => {
+            show("Lead updated successfully");
+            if (updated) {
+              // Merge updated fields into the existing row immediately
+              setLeads(prev => prev.map(l =>
+                l.id === updated.id
+                  ? {
+                      ...l,
+                      first_name:  updated.first_name,
+                      last_name:   updated.last_name,
+                      name:        `${updated.first_name || ""} ${updated.last_name || ""}`.trim(),
+                      email:       updated.email,
+                      phone:       updated.phone,
+                      company:     updated.company,
+                      status:      updated.status,
+                      score:       updated.score,
+                      lead_stage:  updated.lead_stage,
+                      stage:       updated.lead_stage,
+                      ai_decision: updated.ai_decision,
+                      updated_at:  updated.updated_at,
+                    }
+                  : l
+              ));
+            } else {
+              load(page);
+            }
+          }}
         />
       )}
 
@@ -797,6 +852,14 @@ export default function Leads() {
           users={users}
           onClose={() => setShowCreate(false)}
           onCreated={() => { show("Lead created successfully"); load(1); }}
+        />
+      )}
+
+      {/* Live Transcript / Recording */}
+      {transcriptLead && (
+        <LiveTranscriptModal
+          lead={transcriptLead}
+          onClose={() => setTranscriptLead(null)}
         />
       )}
     </div>

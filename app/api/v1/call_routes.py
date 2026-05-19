@@ -6,6 +6,7 @@ from app.auth.dependencies import get_current_user
 from app.models.user import User
 from app.models.lead import Lead
 from app.models.assistant import Assistant
+from app.models.call_log import CallLog
 from app.models.scheduled_call import ScheduledCall
 from app.ai.call_service import CallService
 from app.services.activity_logger import log_activity
@@ -148,3 +149,69 @@ async def cancel_scheduled_call(
 
     await log_activity(current_user.id, "cancel_scheduled_call", {"scheduled_call_id": sc_id})
     return {"message": "Scheduled call cancelled"}
+
+
+# ── GET /calls/leads/{lead_id}/live-transcript ────────────────────────
+# Returns the latest call log for a lead: transcript, call_status,
+# recording_url.  Used by the frontend LiveTranscriptModal to poll
+# during and after a call.
+
+@router.get("/leads/{lead_id}/live-transcript")
+async def get_live_transcript(
+    lead_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    # Ownership check
+    lead = await Lead.get_or_none(id=lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if current_user.role != "admin" and lead.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Fetch the most recent call log for this lead
+    log = await CallLog.filter(lead_id=lead_id).order_by("-created_at").first()
+
+    if not log:
+        return {
+            "lead_id":       lead_id,
+            "call_status":   lead.call_status or "pending",
+            "transcript":    [],
+            "recording_url": None,
+            "ai_decision":   lead.ai_decision,
+            "duration_seconds": None,
+        }
+
+    # Parse the raw transcript string into structured messages.
+    # VAPI stores transcripts as "role: text\nrole: text\n..." lines.
+    # We parse that into [{role, text}] for the chat-style UI.
+    transcript_lines = []
+    raw = log.transcript or lead.last_transcript or ""
+    if raw:
+        for line in raw.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Expected format: "assistant: Hello there" or "user: Yes"
+            if ": " in line:
+                role, _, text = line.partition(": ")
+                role = role.strip().lower()
+                # Normalise VAPI role names
+                if role in ("bot", "assistant", "ai"):
+                    role = "assistant"
+                elif role in ("user", "human", "customer"):
+                    role = "user"
+                else:
+                    role = "assistant"   # default unknown roles to assistant
+                transcript_lines.append({"role": role, "text": text.strip()})
+            else:
+                # No role prefix — treat as assistant message
+                transcript_lines.append({"role": "assistant", "text": line})
+
+    return {
+        "lead_id":          lead_id,
+        "call_status":      log.call_status or lead.call_status or "pending",
+        "transcript":       transcript_lines,
+        "recording_url":    log.recording_url,
+        "ai_decision":      log.ai_decision or lead.ai_decision,
+        "duration_seconds": log.duration_seconds,
+    }

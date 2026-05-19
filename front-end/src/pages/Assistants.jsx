@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bot, Plus, Search, Phone, Eye, RefreshCw, Trash2, Pencil } from "lucide-react";
 import { useAssistants }        from "../hooks/useAssistants";
@@ -11,24 +11,26 @@ import { DeleteConfirmModal }   from "../components/DeleteConfirmModal";
 import { useToast }             from "../components/Toast";
 
 // ── Shared constants ─────────────────────────────────────────────────
-const VOICE_OPTIONS    = ["Elliot", "Lily", "Rohan", "Savannah", "Hana", "Cole"];
-const MODEL_OPTIONS    = ["gpt-4.1", "gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"];
-const PROVIDER_OPTIONS = ["openai", "anthropic"];
+// These are the only supported values — not user-selectable.
+const FIXED_VOICE    = "Elliot";
+const FIXED_PROVIDER = "openai";
+const FIXED_MODEL    = "gpt-4.1";
 
 const EMPTY_FORM = {
   name:           "",
   system_prompt:  "",
   first_message:  "",
-  voice_id:       "Elliot",
-  model_provider: "openai",
-  model_name:     "gpt-4.1",
+  voice_id:       FIXED_VOICE,
+  model_provider: FIXED_PROVIDER,
+  model_name:     FIXED_MODEL,
 };
 
 const inputCls = "w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 transition-colors";
 const labelCls = "block text-xs text-gray-400 mb-1";
 
 // ── Shared assistant form (used by both Create and Edit modals) ───────
-function AssistantForm({ form, setForm, onSubmit, onClose, loading, error, submitLabel }) {
+// readOnlyMeta=true → voice/provider/model shown as static text (not dropdowns)
+function AssistantForm({ form, setForm, onSubmit, onClose, loading, error, submitLabel, readOnlyMeta = false }) {
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const valid = form.name.trim() && form.system_prompt.trim() && form.first_message.trim();
 
@@ -53,25 +55,41 @@ function AssistantForm({ form, setForm, onSubmit, onClose, loading, error, submi
             placeholder="You are a professional sales qualification agent. Your goal is to…" required />
         </div>
 
+        {/* Voice / Provider / Model — read-only fixed values when editing */}
         <div>
           <label className={labelCls}>Voice</label>
-          <select className={inputCls} value={form.voice_id} onChange={set("voice_id")}>
-            {VOICE_OPTIONS.map((v) => <option key={v}>{v}</option>)}
-          </select>
+          {readOnlyMeta ? (
+            <div className="w-full bg-gray-800/50 border border-gray-700 rounded px-3 py-2 text-sm text-gray-300 cursor-not-allowed">
+              {FIXED_VOICE}
+            </div>
+          ) : (
+            <input className={inputCls} value={FIXED_VOICE} readOnly
+              title="Only Elliot is supported" />
+          )}
         </div>
 
         <div>
           <label className={labelCls}>Model Provider</label>
-          <select className={inputCls} value={form.model_provider} onChange={set("model_provider")}>
-            {PROVIDER_OPTIONS.map((p) => <option key={p}>{p}</option>)}
-          </select>
+          {readOnlyMeta ? (
+            <div className="w-full bg-gray-800/50 border border-gray-700 rounded px-3 py-2 text-sm text-gray-300 cursor-not-allowed">
+              OpenAI
+            </div>
+          ) : (
+            <input className={inputCls} value="OpenAI" readOnly
+              title="Only OpenAI is supported" />
+          )}
         </div>
 
         <div className="col-span-2">
           <label className={labelCls}>Model</label>
-          <select className={inputCls} value={form.model_name} onChange={set("model_name")}>
-            {MODEL_OPTIONS.map((m) => <option key={m}>{m}</option>)}
-          </select>
+          {readOnlyMeta ? (
+            <div className="w-full bg-gray-800/50 border border-gray-700 rounded px-3 py-2 text-sm text-gray-300 cursor-not-allowed">
+              {FIXED_MODEL}
+            </div>
+          ) : (
+            <input className={inputCls} value={FIXED_MODEL} readOnly
+              title="Only gpt-4.1 is supported" />
+          )}
         </div>
       </div>
 
@@ -117,23 +135,52 @@ function CreateAssistantModal({ onClose, onCreate }) {
 }
 
 // ── Edit Assistant Modal ──────────────────────────────────────────────
-function EditAssistantModal({ assistant, onClose, onUpdated }) {
+function EditAssistantModal({ assistantId, assistantName, onClose, onUpdated }) {
+  // Form is initialized empty — populated after fetching full data from API
   const [form, setForm] = useState({
-    name:           assistant.name           || "",
-    system_prompt:  assistant.system_prompt  || "",
-    first_message:  assistant.first_message  || "",
-    voice_id:       assistant.voice_id       || "Elliot",
-    model_provider: assistant.model_provider || "openai",
-    model_name:     assistant.model_name     || "gpt-4.1",
+    name:           "",
+    system_prompt:  "",
+    first_message:  "",
+    voice_id:       FIXED_VOICE,
+    model_provider: FIXED_PROVIDER,
+    model_name:     FIXED_MODEL,
   });
-  const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState(null);
+  const [fetching, setFetching] = useState(true);
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState(null);
+
+  // Fetch full assistant details (includes system_prompt + first_message)
+  // on mount — the list endpoint doesn't return those fields
+  useEffect(() => {
+    api.assistants.get(assistantId)
+      .then((data) => {
+        setForm({
+          name:           data.name           || "",
+          system_prompt:  data.system_prompt  || "",
+          first_message:  data.first_message  || "",
+          // Always use fixed values — ignore whatever is stored
+          voice_id:       FIXED_VOICE,
+          model_provider: FIXED_PROVIDER,
+          model_name:     FIXED_MODEL,
+        });
+      })
+      .catch((e) => setError(`Failed to load assistant: ${e.message}`))
+      .finally(() => setFetching(false));
+  }, [assistantId]);
 
   async function handleSubmit(e) {
     e.preventDefault();
     setLoading(true); setError(null);
     try {
-      const updated = await api.assistants.update(assistant.id, form);
+      // Always send fixed values for voice/provider/model — never trust stored values
+      const updated = await api.assistants.update(assistantId, {
+        name:           form.name,
+        system_prompt:  form.system_prompt,
+        first_message:  form.first_message,
+        voice_id:       FIXED_VOICE,
+        model_provider: FIXED_PROVIDER,
+        model_name:     FIXED_MODEL,
+      });
       onUpdated(updated);
       onClose();
     } catch (err) {
@@ -144,9 +191,21 @@ function EditAssistantModal({ assistant, onClose, onUpdated }) {
   }
 
   return (
-    <Modal open onClose={onClose} title={`Edit — ${assistant.name}`} maxWidth="max-w-2xl">
-      <AssistantForm form={form} setForm={setForm} onSubmit={handleSubmit}
-        onClose={onClose} loading={loading} error={error} submitLabel="Save Changes" />
+    <Modal open onClose={onClose} title={`Edit — ${assistantName}`} maxWidth="max-w-2xl">
+      {fetching ? (
+        <div className="flex justify-center py-10"><Spinner /></div>
+      ) : (
+        <AssistantForm
+          form={form}
+          setForm={setForm}
+          onSubmit={handleSubmit}
+          onClose={onClose}
+          loading={loading}
+          error={error}
+          submitLabel="Save Changes"
+          readOnlyMeta
+        />
+      )}
     </Modal>
   );
 }
@@ -207,7 +266,8 @@ export default function Assistants() {
 
   const [search,      setSearch]      = useState("");
   const [showCreate,  setShowCreate]  = useState(false);
-  const [editTarget,  setEditTarget]  = useState(null);   // assistant being edited
+  const [editTarget,  setEditTarget]  = useState(null);   // { id, name } of assistant being edited
+  const [editFetchingId, setEditFetchingId] = useState(null); // id currently being fetched for edit
   const [callTarget,  setCallTarget]  = useState(null);   // assistant for call modal
   const [deleteModal, setDeleteModal] = useState({ open: false, assistant: null });
   const [deletingId,  setDeletingId]  = useState(null);
@@ -341,9 +401,12 @@ export default function Assistants() {
                   className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-xs transition-colors">
                   <Eye size={12} /> Details
                 </button>
-                <button onClick={() => setEditTarget(a)}
-                  className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-xs transition-colors">
-                  <Pencil size={12} /> Edit
+                <button
+                  onClick={() => setEditTarget({ id: a.id, name: a.name })}
+                  disabled={editFetchingId === a.id}
+                  className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-xs transition-colors">
+                  {editFetchingId === a.id ? <Spinner size={11} /> : <Pencil size={12} />}
+                  Edit
                 </button>
                 <button onClick={() => setCallTarget(a)}
                   className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-blue-700 hover:bg-blue-600 text-xs transition-colors">
@@ -374,7 +437,8 @@ export default function Assistants() {
 
       {editTarget && (
         <EditAssistantModal
-          assistant={editTarget}
+          assistantId={editTarget.id}
+          assistantName={editTarget.name}
           onClose={() => setEditTarget(null)}
           onUpdated={handleUpdated}
         />

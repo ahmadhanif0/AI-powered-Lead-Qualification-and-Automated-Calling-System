@@ -24,23 +24,6 @@ class LeadRepository:
 
 
     @staticmethod
-    async def update_lead(
-        lead: Lead,
-        data: dict
-    ) -> Lead:
-
-        lead.first_name = data.get("first_name")
-        lead.last_name = data.get("last_name")
-        lead.email = data.get("email")
-        lead.phone = data.get("phone")
-        lead.company = data.get("company")
-        lead.lead_stage = data.get("lead_stage")
-
-        await lead.save()
-
-        return lead
-
-    @staticmethod
     async def create_lead(data: dict) -> Lead:
 
         return await Lead.create(
